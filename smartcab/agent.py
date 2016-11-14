@@ -4,6 +4,7 @@ from environment import Agent, Environment
 from planner import RoutePlanner
 from simulator import Simulator
 import numpy as np
+import pandas as pd
 
 class LearningAgent(Agent):
     """An agent that learns to drive in the smartcab world."""
@@ -13,20 +14,40 @@ class LearningAgent(Agent):
         self.color = 'red'  # override color
         self.planner = RoutePlanner(self.env, self)  # simple route planner to get next_waypoint
         # TODO: Initialize any additional variables here
-        self.actions = [None, 'forward', 'left', 'right']
+        self.actions = [None, 'forward', 'left']
         self.learning_rate = 0.3
         self.state = None
-        self.q = {}
+        self.Qtable = {}
         self.trips = 0
 
+        self.Q_init = 0  #initial Q^ values for new state-actions not observed yet.
+        
+        self.gamma = 0
+        #self.gamma = 0.1  #discounting rate of future rewards
+
+        self.epsilon = 1
+        #self.epsilon = 0.75 + (0.24 / (1+( math.exp(-0.1*(self.lesson_counter-40)))))
+        
+        self.alpha = 1
+        #self.alpha = 1 - ( 0.5 / (1 + math.exp(-0.05*(self.lesson_counter-100)))) #alpha ranges from 1 to 0.5
+
+        # logging
+        self.learning_table = []
+
+        self.reward_previous = None
+        self.action_previous = None
+        self.state_previous = None
+
     def reset(self, destination=None):
-        self.planner.route_to(destination)
-        # TODO: Prepare for a new trip; reset any variables here, if required
+        #log trip and success rate 
+        #
+        #print("trip = {}, destination_reached = {}".format(self.trips, self.env.destination_reached))
         self.planner.route_to(destination)
         # Prepare for a new trip; reset any variables here, if required
         self.trips += 1
-        if self.trips >= 100:
-            self.learning_rate = 0
+        self.steps_counter = 0
+
+        
 
     def update(self, t):
         # Gather inputs
@@ -41,47 +62,41 @@ class LearningAgent(Agent):
 self.next_waypoint)
         self.state = state
         
+        # TODO: Select action according to your policy
+        Qtable = self.Qtable #populate Qtable variable with current object.Qtable 
+        if Qtable.has_key(self.state): #check if state has been encountered before or not
+            if random.random() < self.epsilon : #if epsilon is less than  random float, then choose the action with the largest Q^
+                argmax_actions = {action:Qhat for action, Qhat in Qtable[self.state].items() if Qhat == max(Qtable[self.state].values())}
+                action = random.choice(argmax_actions.keys())
+            else : # if random is greater, choose a random action.
+                action = random.choice([None, 'forward', 'left', 'right'])
+        else :  #state has never been encountered
+            Qtable.update({self.state : {None : self.Q_init, 'forward' : self.Q_init, 'left' : self.Q_init, 'right' : self.Q_init}}) #Add state to Qtable dictionary
+            action = random.choice([None, 'forward', 'left', 'right'])  #choose one of the actions at random
 
-        for action in self.actions:
-            if (state, action) not in self.q:
-                self.q[(state, action)] = 1
-
-
-        """"# TODO: Select action according to your policy
-        #print 'valid_actions', random.choice(Environment.valid_actions[1:])
-        action_okay = True
-        if self.next_waypoint == 'right':
-            if inputs['light'] == 'red' and inputs['left'] == 'forward':
-                action_okay = False
-        elif self.next_waypoint == 'forward':
-            if inputs['light'] == 'red':
-                action_okay = False
-        elif self.next_waypoint == 'left':
-            if inputs['light'] == 'red' or (inputs['oncoming'] == 'forward' or inputs['oncoming'] == 'right'):
-                action_okay = False
-
-        action = None
-        if action_okay:
-            action = self.next_waypoint
-            self.next_waypoint = random.choice(Environment.valid_actions[1:])
-       """
-        probabilities = [self.q[(state, None)], self.q[(state, 'forward')], self.q[(state, 'left')], self.q[(state, 'right')]]
-        
-       #  Q lerning =  Reward optimization based on Sate, Action and reward
-        action = self.actions[np.argmax(probabilities)]
         # Execute action and get reward
         reward = self.env.act(self, action)
 
         # TODO: Learn policy based on state, action, reward
-        
-        #Learn policy based on state, action, reward
-        self.q[(state, action)] = self.learning_rate * reward + (1 - self.learning_rate) * self.q[(state, action)]
+        if self.steps_counter > 0 :  #make sure it is not the first step in a trial.
+            Q_hat = Qtable[self.state_previous][self.action_previous]
+            Q_hat = Q_hat + (self.alpha * (self.reward_previous + (self.gamma * (max(Qtable[self.state].values()))) - Q_hat))
+            Qtable[self.state_previous][self.action_previous] = Q_hat
+            self.Qtable = Qtable
 
+        self.state_previous = self.state
+        self.action_previous = action
+        self.reward_previous = reward
+        self.steps_counter += 1
+
+        #print("trip = {}, step= {},  deadline = {}, inputs = {}, action = {}, reward = {}".format(self.trips, self.steps_counter, deadline, inputs, action, reward))  # [debug]
+        self.learning_table.append([self.trips, self.steps_counter, deadline, inputs, action, reward])
+        
+           
     def get_state(self):
         return self.state
 
-        #print "LearningAgent.update(): deadline = {}, inputs = {}, action = {}, reward = {}".format(deadline, inputs, action, reward)  # [debug]
-        #print Q_table
+
 
 
 def run():
@@ -90,12 +105,17 @@ def run():
     # Set up environment and agent
     e = Environment()  # create environment (also adds some dummy traffic)
     a = e.create_agent(LearningAgent)  # create agent
-    e.set_primary_agent(a, enforce_deadline=False)  # set agent to track
+    e.set_primary_agent(a, enforce_deadline=True)  # set agent to track
 
     # Now simulate it
-    sim = Simulator(e, update_delay=1.0)  # reduce update_delay to speed up simulation
-    sim.run(n_trials=1)  # press Esc or close pygame window to quit
-
+    sim = Simulator(e, update_delay=0, display=False)  # reduce update_delay to speed up simulation
+    sim.run(n_trials=100)  # press Esc or close pygame window to quit
+    #columns = ['tripID, teps_counter, deadline, inputs, action, reward']
+    #columns=['trips', 'sucess'
+    
+    df = pd.DataFrame(a.learning_table)
+    df.to_csv('results.csv', index=False)
+    #print("Success rate: = {}".format( df.sucess.sum()* 1.0 / df.trips.count()* 1.0  ))
 
 if __name__ == '__main__':
     run()
